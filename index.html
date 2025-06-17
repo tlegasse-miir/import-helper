@@ -1,0 +1,338 @@
+<head>
+    <style>
+        html,
+        body {
+            padding: 0;
+            margin: 0;
+        }
+
+        .hidden-until-prepared-sta:not(.visible),
+        .hidden-until-prepared-ats:not(.visible),
+        .step-1:not(.visible),
+        .step-2:not(.visible),
+        .reset-state-container:not(.visible) {
+            display: none;
+        }
+
+        * {
+            font-family: sans-serif;
+        }
+
+        li {
+            margin-top: 10px;
+        }
+
+        ol,
+        .step-1 {
+            background-color: #eaeaea;
+            padding: 10px 15px 10px 35px;
+        }
+
+        h1 {
+            color: white;
+            background-color: #333;
+            margin-top: 0;
+            padding: 15px;
+            font-weight: 300;
+        }
+
+        h2 {
+            padding-left: 15px;
+            margin-top: 35px;
+        }
+
+        .pad-left {
+            margin-left: 15px;
+        }
+    </style>
+    <script type='text/javascript'>
+        class CSVader {
+            csNumberStorageKey = "cs-number";
+            acuUrlStorageKey = "acu-url";
+            storedCsNumberVal = localStorage.getItem(this.csNumberStorageKey);
+            storedAcuUrlVal = localStorage.getItem(this.acuUrlStorageKey);
+            currentDate = "";
+
+            constructor() {
+                this.translateSnappyData = this.translateSnappyData.bind(this);
+                this.translateAcumaticaData = this.translateAcumaticaData.bind(this);
+
+                this.currentDate = this.getCurrentDateString();
+                this.setupElements();
+                this.setupStepOneCompletionListener();
+                this.completeStepOne();
+                this.setupResetStateListeners();
+
+                // Setting up the acumatica import listeners
+                this.setupFileTranslationListeners(
+                    this.acuUploadFileInput,
+                    this.translateSnappyData
+                );
+
+                // Setting up the snappy import listeners
+                this.setupFileTranslationListeners(
+                    this.snappyUpdloadFileInput,
+                    this.translateAcumaticaData
+                );
+            }
+
+            setupElements() {
+                this.resetButton = document.getElementById("reset-state");
+                this.csNumberInput = document.getElementById("cs-number");
+                this.acumaticaLinkInput = document.getElementById("acu-link");
+                this.acuUploadFileInput = document.getElementById("acumatica-upload");
+                this.snappyUpdloadFileInput = document.getElementById("snappy-upload");
+                this.stepOneElement = document.querySelector(".step-1");
+                this.stepTwoElement = document.querySelector(".step-2");
+                this.stepOneButton = document.getElementById("step-one-submit");
+                this.prependLinks = document.querySelectorAll(".prepend-links");
+            }
+
+            getCurrentDateString() {
+                const now = new Date();
+                return `${now.getMonth() + 1}${now
+                    .getDate()
+                    .toString()
+                    .padStart(2, "0")}${now.getFullYear().toString().slice(-2)}`;
+            }
+
+            setupFileTranslationListeners(button, prepareData) {
+                if (!button) return;
+
+                button.addEventListener("change", (event) => {
+                    const file = event.target.files[0];
+
+                    if (!file) {
+                        console.error("No file selected.");
+                        return;
+                    }
+
+                    Papa.parse(file, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: (results) => {
+                            if (results.errors.length) {
+                                console.error("Error parsing file:", results.errors);
+                                return;
+                            }
+                            prepareData(results);
+                        },
+                        error: (error) => console.error("Error during parsing:", error)
+                    });
+                });
+            }
+
+            translateSnappyData(data) {
+                const preparedData = data.data.map((row, index) => ({
+                    Number: (index + 1).toString(),
+                    Active: "True",
+                    Processed: "True",
+                    Error: "",
+                    "Full Name": `${row["Shipping address first name"]} ${row["Shipping address last name"]}`,
+                    "Address Line 1": row["Shipping address street 1"],
+                    "Address Line 2": row["Shipping address street 2"],
+                    City: row["Shipping address city"],
+                    State: row["Shipping address state"],
+                    "Postal Code": row["Shipping address zip"],
+                    "Country Code": row["Shipping address country"],
+                    Phone: this.storedCsNumberVal,
+                    Qty: row["Quantity"],
+                    "Order Nbr": row["Order number"],
+                    "Inventory ID": row["Seller SKU"],
+                    "Unit Price": row["Unit price"],
+                    "Order Description": `SNAPPY - ${row["Order number"]}`
+                }));
+
+                const finalData = Papa.unparse(preparedData);
+                const fileName = `snappy-to-acu-${this.currentDate}.csv`;
+                this.download(fileName, finalData);
+                this.showByClassname("hidden-until-prepared-sta");
+            }
+
+            translateAcumaticaData(data) {
+                const preparedData = data.data.map((row) => ({
+                    "order-id": row["Customer Order Nbr."],
+                    "carrier-code": "",
+                    "carrier-name": "UPS",
+                    "carrier-url":
+                        "https://www.ups.com/track?track=yes&trackNums=" +
+                        row["Tracking Number"],
+                    "tracking-number": row["Tracking Number"],
+                    "offer-sku": row["Inventory ID"],
+                    "order-line-id": "",
+                    quantity: row["Shipped Qty."]
+                }));
+
+                const finalData = Papa.unparse(preparedData);
+                const fileName = `acu-to-snappy-${this.currentDate}.csv`;
+                this.download(fileName, finalData);
+                this.showByClassname("hidden-until-prepared-ats");
+            }
+
+            download(fileName, fileContents) {
+                const fileBlob = new Blob([fileContents], {
+                    type: "text/csv;charset=utf-8;"
+                });
+                const url = URL.createObjectURL(fileBlob);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = fileName;
+                document.body.appendChild(link); // Ensure it works in Firefox
+                link.click();
+                document.body.removeChild(link); // Clean up
+                URL.revokeObjectURL(url);
+            }
+
+            validateStepOne() {
+                if (
+                    localStorage.getItem(this.acuUrlStorageKey) &&
+                    localStorage.getItem(this.csNumberStorageKey)
+                ) {
+                    return true;
+                }
+                let hostname;
+
+                try {
+                    const url = new URL(this.acumaticaLinkInput.value);
+
+                    hostname = "https://" + url.hostname;
+                } catch (error) {
+                    console.error(error);
+                    return false;
+                }
+
+                if (this.csNumberInput.value == "") return false;
+
+                localStorage.setItem(this.csNumberStorageKey, this.csNumberInput.value);
+                this.storedCsNumberVal = this.csNumberInput.value;
+
+                localStorage.setItem(this.acuUrlStorageKey, hostname);
+                this.storedAcuUrlVal = hostname;
+
+                return true;
+            }
+
+            resetState() {
+                if (
+                    !confirm(
+                        "You sure you want to reset your local state? Not a big deal, just checking first."
+                    )
+                )
+                    return false;
+
+                localStorage.removeItem(this.acuUrlStorageKey);
+                localStorage.removeItem(this.csNumberStorageKey);
+                this.hideByClassname("reset-state-container");
+            }
+
+            completeStepOne() {
+                if (this.validateStepOne()) {
+                    console.log("Running through to step 2");
+                    this.updateLinks();
+                    this.hideByClassname("step-1");
+                    this.showByClassname("step-2");
+                    this.showByClassname("reset-state-container");
+                }
+
+                if (!this.storedAcuUrlVal || !this.storedCsNumberVal) {
+                    console.error("Missing values for the acu or cs number inputs.");
+                    console.error("Acu url: " + this.storedAcuUrlVal);
+                    console.error("CS Number: " + this.storedCsNumberVal);
+                    return;
+                }
+            }
+
+            updateLinks() {
+                console.log(this.prependLinks);
+                for (const link of this.prependLinks) {
+                    const suffix = link.dataset.suffix;
+
+                    console.log("updating link");
+                    link.setAttribute("href", this.storedAcuUrlVal + suffix);
+                }
+            }
+
+            setupResetStateListeners() {
+                if (!this.resetButton) {
+                    return;
+                }
+
+                this.resetButton.addEventListener("click", () => {
+                    this.resetState();
+                    this.showByClassname("step-1");
+                    this.hideByClassname("step-2");
+                });
+            }
+
+            setupStepOneCompletionListener() {
+                if (!this.stepOneButton) {
+                    return;
+                }
+
+                this.stepOneButton.addEventListener("click", () => {
+                    this.completeStepOne();
+                });
+            }
+
+            showByClassname(className) {
+                Array.from(document.getElementsByClassName(className)).forEach((step) => {
+                    step.classList.add("visible");
+                });
+            }
+
+            hideByClassname(className) {
+                Array.from(document.getElementsByClassName(className)).forEach((step) => {
+                    step.classList.remove("visible");
+                });
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", () => {
+            const csvader = new CSVader();
+        });
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"
+        integrity="sha512-dfX5uYVXzyU8+KHqj8bjo7UkOdg18PaOtpa48djpNbZHwExddghZ+ZmzWT06R5v6NSk3ZUfsH6FNEDepLx9hPQ=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+
+<body>
+    <h1><strong>CSV</strong>ader</h1>
+    <p class="pad-left">This interface is designed to make managing snappy easier. Reach out to Tanner for
+        questions/comments.</p>
+
+    <div class="step-1 pad-left visible">
+        <p>Paste Acumatica link: <input type="text" id="acu-link" placeholder="https://www.someurl.com" /></p>
+        <p>Paste CS Phone Number: <input type="text" id="cs-number" placeholder="5555555555" /></p>
+        <input type="button" id="step-one-submit" value="Submit" />
+    </div>
+    <div class="step-2">
+        <h2>Import orders to Acu:</h2>
+        <ol>
+            <li>First, <a
+                    href="https://snappygiftsus-prod.mirakl.net/mmp/shop/order/search?orderStateGroup=WAITING_ACCEPTANCE&&sort=dateCreated&order=desc"
+                    target="_blank">accept the appropriate orders</a></li>
+            <li><a href="https://snappygiftsus-prod.mirakl.net/mmp/shop/order/export?uuid=&lastname=&dateFrom=&dateTo=&priceFrom=&priceTo=&orderStateGroup=SHIPPING&_orderState=1&withIncidents=&_incidentReason=1&withRefunds=&_refundReason=1&shippingDeadlineFilter=&_shippingType=1&sort=dateCreated&order=desc&oafv%5B%27phone-number%27%5D.value=&oafv%5B%27or%27%5D.value=&oafv%5B%27email-address%27%5D.value=&oafv%5B%27payable-amount%27%5D.numberValue=&oafv%5B%27accounting-document-id-payment%27%5D.value=&oafv%5B%27accounting-document-id-refund%27%5D.value=&format=CSV"
+                    target="_BLANK">Download your CSV</a></li>
+            <li>Click the file upload button here and select the file <input type="file" id="acumatica-upload" /></li>
+            <li class="hidden-until-prepared-sta">Click <a class="prepend-links"
+                    data-suffix="/(W(3))/Main?CompanyID=Holdings&ScreenId=SM206036&Name=Snappy+SO+Import"
+                    target="_blank">here</a> to find the uploader and drag the downloaded file onto this screen</li>
+        </ol>
+
+        <h2>Import shipments to Snappy:</h2>
+        <ol>
+            <li><a class="prepend-links"
+                    data-suffix="/(W(234))/Main?CompanyID=Holdings&ScreenId=EB620021&Name=Snappy_ShipmentsExport"
+                    target="_BLANK">Export shipment details from Acu</a></li>
+            <li>Click the file upload button here and select the file <input type="file" id="snappy-upload" /></li>
+            <li class="hidden-until-prepared-ats">Click <a
+                    href="https://snappygiftsus-prod.mirakl.net/mmp/shop/order/search?orderStateGroup=SHIPPING&sort=dateCreated&order=desc"
+                    target="_BLANK">here</a> and upload the document that just downloaded</li>
+        </ol>
+    </div>
+
+    <p class="pad-left reset-state-container" class="visible">
+        Reset stored data <input type="button" id="reset-state" value="Reset">
+    </p>
+</body>
